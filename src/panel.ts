@@ -40,6 +40,34 @@ body {
   font-size: 13px;
 }
 
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.search input {
+  width: 190px;
+  background: #0f172a;
+  color: white;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+.search input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.search-status {
+  min-width: 46px;
+  color: #94a3b8;
+  text-align: right;
+}
+
 button {
   background: #1e293b;
   color: white;
@@ -69,6 +97,16 @@ button {
   fill: #1e293b;
   stroke: #38bdf8;
   stroke-width: 1.5;
+}
+
+.table-group.search-hit .table-box {
+  stroke: #facc15;
+  stroke-width: 2.2;
+}
+
+.table-group.search-active .table-box {
+  stroke: #fb923c;
+  stroke-width: 3;
 }
 
 .table-head {
@@ -125,6 +163,12 @@ button {
     <button onclick="zoomOut()">-</button>
     <button onclick="resetView()">Reset</button>
     <span>Wheel = zoom, middle mouse / space drag = pan, drag table = move</span>
+    <div class="search">
+      <input id="searchInput" type="search" placeholder="Search table or column" />
+      <button id="prevSearch" title="Previous match">Prev</button>
+      <button id="nextSearch" title="Next match">Next</button>
+      <span id="searchStatus" class="search-status">0/0</span>
+    </div>
   </div>
 
   <div id="wrap">
@@ -146,6 +190,10 @@ const relationsLayer = document.getElementById('relations')
 const tablesLayer = document.getElementById('tables')
 const count = document.getElementById('count')
 const zoomText = document.getElementById('zoomText')
+const searchInput = document.getElementById('searchInput')
+const prevSearchButton = document.getElementById('prevSearch')
+const nextSearchButton = document.getElementById('nextSearch')
+const searchStatus = document.getElementById('searchStatus')
 
 const collections = data.collections || {}
 
@@ -173,6 +221,8 @@ let dragTable = null
 let startMouse = { x: 0, y: 0 }
 let startPan = { x: 0, y: 0 }
 let tablePositions = {}
+let searchMatches = []
+let activeSearchIndex = -1
 
 function updateTransform() {
   viewport.setAttribute('transform', 'translate(' + panX + ',' + panY + ') scale(' + scale + ')')
@@ -219,12 +269,130 @@ window.zoomIn = zoomIn
 window.zoomOut = zoomOut
 window.resetView = resetView
 
+function focusSearch() {
+  searchInput.focus()
+  searchInput.select()
+}
+
+function getTableSearchText(table, columns) {
+  return [
+    table.name,
+    table.comment,
+    ...columns.flatMap(column => [
+      getColumnName(column),
+      getColumnType(column),
+      column.comment
+    ])
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function getTableGroup(id) {
+  return Array.from(tablesLayer.querySelectorAll('.table-group'))
+    .find(group => group.dataset.id === id)
+}
+
+function clearSearchClasses() {
+  tablesLayer.querySelectorAll('.table-group').forEach(group => {
+    group.classList.remove('search-hit', 'search-active')
+  })
+}
+
+function updateSearchStatus() {
+  searchStatus.textContent = searchMatches.length
+    ? (activeSearchIndex + 1) + '/' + searchMatches.length
+    : '0/0'
+}
+
+function focusTable(id) {
+  const position = tablePositions[id]
+  if (!position) return
+
+  const rect = svg.getBoundingClientRect()
+  panX = rect.width / 2 - (position.x + position.width / 2) * scale
+  panY = rect.height / 2 - (position.y + position.height / 2) * scale
+  updateTransform()
+}
+
+function activateSearchMatch(index) {
+  if (!searchMatches.length) {
+    activeSearchIndex = -1
+    updateSearchStatus()
+    return
+  }
+
+  activeSearchIndex = (index + searchMatches.length) % searchMatches.length
+  clearSearchClasses()
+
+  searchMatches.forEach(id => {
+    getTableGroup(id)?.classList.add('search-hit')
+  })
+
+  const activeId = searchMatches[activeSearchIndex]
+  getTableGroup(activeId)?.classList.add('search-active')
+  focusTable(activeId)
+  updateSearchStatus()
+}
+
+function updateSearch() {
+  const query = searchInput.value.trim().toLowerCase()
+  clearSearchClasses()
+
+  if (!query) {
+    searchMatches = []
+    activeSearchIndex = -1
+    updateSearchStatus()
+    return
+  }
+
+  searchMatches = Object.entries(tablePositions)
+    .filter(([, position]) => position.searchText.includes(query))
+    .map(([id]) => id)
+
+  activateSearchMatch(0)
+}
+
+function nextSearchMatch(delta) {
+  if (!searchMatches.length) {
+    updateSearch()
+    return
+  }
+
+  activateSearchMatch(activeSearchIndex + delta)
+}
+
+searchInput.addEventListener('input', updateSearch)
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    nextSearchMatch(e.shiftKey ? -1 : 1)
+  }
+
+  if (e.key === 'Escape') {
+    searchInput.value = ''
+    updateSearch()
+    svg.focus?.()
+  }
+})
+prevSearchButton.addEventListener('click', () => nextSearchMatch(-1))
+nextSearchButton.addEventListener('click', () => nextSearchMatch(1))
+
 svg.addEventListener('wheel', (e) => {
   e.preventDefault()
   zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 0.88)
 }, { passive: false })
 
 window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    focusSearch()
+    return
+  }
+
+  if (e.target === searchInput) return
+
   if (e.code === 'Space') {
     spaceDown = true
     e.preventDefault()
@@ -329,7 +497,14 @@ function renderTables() {
     const width = 310
     const height = 52 + columns.length * 22
 
-    tablePositions[id] = { x, y, width, height, table }
+    tablePositions[id] = {
+      x,
+      y,
+      width,
+      height,
+      table,
+      searchText: getTableSearchText(table, columns)
+    }
 
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     group.setAttribute('class', 'table-group')
@@ -360,6 +535,8 @@ function renderTables() {
 
     tablesLayer.appendChild(group)
   })
+
+  updateSearch()
 }
 
 function findTableByColumnId(columnId) {
