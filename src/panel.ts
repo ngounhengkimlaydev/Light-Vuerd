@@ -905,7 +905,6 @@ function renameTable(tableId) {
 function deleteTable(tableId) {
   const key = getTableEntityKey(tableId)
   const table = tableEntities[key]; if (!table) return
-  if (!confirm('Delete table "' + (table.name || tableId) + '" and all its fields?')) return
   const columnIds = [...getTableColumnIds(table)]
   columnIds.forEach(id => delete columnEntities[id])
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
@@ -913,7 +912,7 @@ function deleteTable(tableId) {
   })
   delete tableEntities[key]
   if (selectedTableId === tableId || selectedTableId === key) { selectedTableId = null; selectedColumnId = null }
-  renderAll(); scheduleSave()
+  renderAll(); saveFile()
 }
 
 function addField(tableId) {
@@ -953,7 +952,6 @@ function editField(tableId, columnId) {
 function deleteField(tableId, columnId) {
   const key = getTableEntityKey(tableId)
   const table = tableEntities[key]; const col = columnEntities[columnId]; if (!table || !col) return
-  if (!confirm('Delete field "' + getColumnName(col) + '"?')) return
   const ids = getTableColumnIds(table).filter(id => id !== columnId)
   table.seqColumnIds = ids; table.columnIds = ids
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
@@ -961,7 +959,7 @@ function deleteField(tableId, columnId) {
   })
   delete columnEntities[columnId]
   if (selectedColumnId === columnId) selectedColumnId = null
-  renderAll(); selectTable(key); scheduleSave()
+  renderAll(); selectTable(key); saveFile()
 }
 
 function addRelationship(fromTableId) {
