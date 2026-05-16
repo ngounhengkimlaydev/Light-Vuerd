@@ -1,7 +1,20 @@
 {
   "name": "light-vuerd",
   "displayName": "Light Vuerd",
+  "description": "A lightweight ERD viewer for Vuerd JSON files in VS Code.",
   "version": "0.0.1",
+  "license": "Apache-2.0",
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "vuerd",
+    "erd",
+    "database",
+    "diagram",
+    "schema"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -28,7 +41,9 @@
   },
   "scripts": {
     "build": "node esbuild.js",
-    "watch": "node esbuild.js --watch"
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^25.8.0",
