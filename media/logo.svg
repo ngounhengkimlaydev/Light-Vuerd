@@ -1,0 +1,49 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="48" fill="#F8FAFC"/>
+
+  <!-- Main ERD diagram card -->
+  <rect x="42" y="54" width="172" height="148" rx="18" fill="#E0F2FE" stroke="#0F172A" stroke-width="6"/>
+
+  <!-- Entity tables -->
+  <rect x="64" y="78" width="52" height="42" rx="8" fill="#38BDF8" stroke="#0F172A" stroke-width="5"/>
+  <rect x="64" y="78" width="52" height="13" rx="6" fill="#0284C7"/>
+  <line x1="74" y1="100" x2="106" y2="100" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+  <line x1="74" y1="111" x2="98" y2="111" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+
+  <rect x="140" y="78" width="52" height="42" rx="8" fill="#34D399" stroke="#0F172A" stroke-width="5"/>
+  <rect x="140" y="78" width="52" height="13" rx="6" fill="#059669"/>
+  <line x1="150" y1="100" x2="182" y2="100" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+  <line x1="150" y1="111" x2="174" y2="111" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+
+  <rect x="102" y="146" width="52" height="42" rx="8" fill="#FACC15" stroke="#0F172A" stroke-width="5"/>
+  <rect x="102" y="146" width="52" height="13" rx="6" fill="#EAB308"/>
+  <line x1="112" y1="168" x2="144" y2="168" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+  <line x1="112" y1="179" x2="136" y2="179" stroke="#0F172A" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- ERD relation lines -->
+  <line x1="116" y1="99" x2="140" y2="99" stroke="#0F172A" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="128" cy="99" r="5" fill="#F8FAFC" stroke="#0F172A" stroke-width="4"/>
+
+  <path d="M90 120V136C90 143 96 150 103 150" stroke="#0F172A" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M166 120V136C166 143 160 150 153 150" stroke="#0F172A" stroke-width="5" stroke-linecap="round" fill="none"/>
+
+  <!-- ERD label -->
+  <rect x="77" y="24" width="102" height="42" rx="14" fill="#0F172A"/>
+  <text x="128" y="52" text-anchor="middle"
+    font-family="Inter, Arial, sans-serif"
+    font-size="24"
+    font-weight="800"
+    fill="#FFFFFF"
+    letter-spacing="1">
+    ERD
+  </text>
+
+  <!-- Bottom name -->
+  <text x="128" y="230" text-anchor="middle"
+    font-family="Inter, Arial, sans-serif"
+    font-size="20"
+    font-weight="800"
+    fill="#0F172A">
+    Light Vuerd
+  </text>
+</svg>

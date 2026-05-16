@@ -4,6 +4,8 @@
   "description": "A lightweight ERD viewer for Vuerd JSON files in VS Code.",
   "version": "0.0.1",
   "license": "Apache-2.0",
+  "icon": "media/logo.svg",
+  "publisher": "ngounhengkimlaydev",
   "categories": [
     "Visualization",
     "Other"

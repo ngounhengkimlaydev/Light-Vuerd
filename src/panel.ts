@@ -852,6 +852,18 @@ function selectTable(tableId, columnId = null) {
 function getSelectedTable() { return selectedTableId ? tableEntities[selectedTableId] : null }
 function getSelectedColumn() { return selectedColumnId ? columnEntities[selectedColumnId] : null }
 
+function getTableEntityKey(tableId) {
+  if (!tableId) return tableId
+  if (tableEntities[tableId]) return tableId
+
+  const found = Object.entries(tableEntities).find(([, table]) => table?.id === tableId)
+  return found?.[0] || tableId
+}
+
+function getTableEntity(tableId) {
+  return tableEntities[getTableEntityKey(tableId)]
+}
+
 // ── CRUD ──
 function createTable(worldX, worldY) {
   showEditor(container => {
@@ -875,7 +887,8 @@ function createTable(worldX, worldY) {
 }
 
 function renameTable(tableId) {
-  const table = tableEntities[tableId]; if (!table) return
+  const key = getTableEntityKey(tableId)
+  const table = tableEntities[key]; if (!table) return
   showEditor(container => {
     const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Rename Table'; container.appendChild(title)
     const nameField = makeTextField(container, 'Name', table.name || '', 'table name')
@@ -890,20 +903,22 @@ function renameTable(tableId) {
 }
 
 function deleteTable(tableId) {
-  const table = tableEntities[tableId]; if (!table) return
+  const key = getTableEntityKey(tableId)
+  const table = tableEntities[key]; if (!table) return
   if (!confirm('Delete table "' + (table.name || tableId) + '" and all its fields?')) return
   const columnIds = [...getTableColumnIds(table)]
   columnIds.forEach(id => delete columnEntities[id])
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
-    if (relationshipUses(tableId, columnIds, rel)) delete relationshipEntities[rid]
+    if (relationshipUses(key, columnIds, rel) || (table.id && relationshipUses(table.id, columnIds, rel))) delete relationshipEntities[rid]
   })
-  delete tableEntities[tableId]
-  if (selectedTableId === tableId) { selectedTableId = null; selectedColumnId = null }
+  delete tableEntities[key]
+  if (selectedTableId === tableId || selectedTableId === key) { selectedTableId = null; selectedColumnId = null }
   renderAll(); scheduleSave()
 }
 
 function addField(tableId) {
-  const table = tableEntities[tableId]; if (!table) return
+  const key = getTableEntityKey(tableId)
+  const table = tableEntities[key]; if (!table) return
   showEditor(container => {
     const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Add Field'; container.appendChild(title)
     const nameField = makeTextField(container, 'Field Name', '', 'e.g. email')
@@ -914,7 +929,7 @@ function addField(tableId) {
       const id = makeId('column', columnEntities)
       columnEntities[id] = { id, name, dataType: typeField.getValue().trim() }
       getTableColumnIds(table).push(id)
-      renderAll(); selectTable(tableId, id); scheduleSave()
+      renderAll(); selectTable(key, id); scheduleSave()
     })
     setTimeout(() => nameField.input.focus(), 50)
   })
@@ -936,16 +951,17 @@ function editField(tableId, columnId) {
 }
 
 function deleteField(tableId, columnId) {
-  const table = tableEntities[tableId]; const col = columnEntities[columnId]; if (!table || !col) return
+  const key = getTableEntityKey(tableId)
+  const table = tableEntities[key]; const col = columnEntities[columnId]; if (!table || !col) return
   if (!confirm('Delete field "' + getColumnName(col) + '"?')) return
   const ids = getTableColumnIds(table).filter(id => id !== columnId)
   table.seqColumnIds = ids; table.columnIds = ids
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
-    if (relationshipUses(tableId, [columnId], rel)) delete relationshipEntities[rid]
+    if (relationshipUses(key, [columnId], rel) || (table.id && relationshipUses(table.id, [columnId], rel))) delete relationshipEntities[rid]
   })
   delete columnEntities[columnId]
   if (selectedColumnId === columnId) selectedColumnId = null
-  renderAll(); selectTable(tableId); scheduleSave()
+  renderAll(); selectTable(key); scheduleSave()
 }
 
 function addRelationship(fromTableId) {
@@ -1185,7 +1201,7 @@ canvasWrap.addEventListener('contextmenu', e => {
     { icon:'⊞', label:'Fit All', action: fitAll },
     { icon:'⟳', label:'Reset View', action: resetView },
     '---',
-    { icon:'💾', label:'Save', action: saveFile },
+    { icon:'', label:'Save', action: saveFile },
   ])
 })
 
@@ -1292,12 +1308,18 @@ function getRelationEndpoints(rel) {
     || findTableByColumnId(rel.start?.columnId || rel.parentColumnId || rel.sourceColumnId || rel.fromColumnId)
   const endTableId = rel.end?.tableId || rel.endTableId || rel.childTableId || rel.targetTableId || rel.toTableId
     || findTableByColumnId(rel.end?.columnId || rel.childColumnId || rel.targetColumnId || rel.toColumnId)
-  return {startTableId, endTableId}
+  return {
+    startTableId: getTableEntityKey(startTableId),
+    endTableId: getTableEntityKey(endTableId)
+  }
 }
 
 function relationshipUses(tableId, columnIds, rel) {
+  const key = getTableEntityKey(tableId)
+  const table = tableEntities[key]
+  const possibleTableIds = [key, tableId, table?.id].filter(Boolean)
   const ep = getRelationEndpoints(rel)
-  if (ep.startTableId===tableId || ep.endTableId===tableId) return true
+  if (possibleTableIds.includes(ep.startTableId) || possibleTableIds.includes(ep.endTableId)) return true
   const relCols = [rel.start?.columnId, rel.end?.columnId, rel.parentColumnId, rel.sourceColumnId,
     rel.fromColumnId, rel.childColumnId, rel.targetColumnId, rel.toColumnId].filter(Boolean)
   return relCols.some(id => columnIds.includes(id))
