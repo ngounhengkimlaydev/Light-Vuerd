@@ -1,0 +1,39 @@
+{
+  "name": "light-vuerd",
+  "displayName": "Light Vuerd",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:lightVuerd.open"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lightVuerd.open",
+        "title": "Light Vuerd: Open ERD"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "lightVuerd.open",
+          "when": "resourceExtname == .json",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  }
+}
