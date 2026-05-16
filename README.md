@@ -8,7 +8,6 @@ It opens `.json` / `.vuerd.json` files in an interactive ERD panel with draggabl
 
 ![Light Vuerd ERD panel](images/screenshot.png)
 
-> You can replace `images/screenshot.png` with your own screen image before publishing. Keep the image inside the repository so it shows correctly on the VS Code Marketplace.
 
 ## Features
 
