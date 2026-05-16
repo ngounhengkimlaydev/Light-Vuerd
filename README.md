@@ -16,17 +16,9 @@ It opens `.json` / `.vuerd.json` files in an interactive ERD panel with draggabl
 - Render relationship cardinality using one, optional, and many markers.
 - Use dashed relationship lines for clearer visual separation.
 
-## Screenshot
+## Image
 
-You can add an image of your screen here.
-
-1. Create an `images` folder if it does not exist.
-2. Add your screenshot as `images/screenshot.png`.
-3. Replace this note with:
-
-```md
-![Light Vuerd ERD panel](images/screenshot.png)
-```
+![Light Vuerd](images/screenshot.png)
 
 ## Usage
 
