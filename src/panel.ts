@@ -731,7 +731,12 @@ function showCtxMenu(x, y, items) {
     const el = document.createElement('div')
     el.className = 'ctx-item' + (item.danger ? ' danger' : '')
     el.innerHTML = '<span class="ctx-icon">' + (item.icon||'') + '</span><span>' + item.label + '</span>' + (item.hint ? '<span class="ctx-shortcut">' + item.hint + '</span>' : '')
-    el.addEventListener('click', () => { hideCtx(); item.action() })
+    el.addEventListener('click', e => {
+      e.preventDefault()
+      e.stopPropagation()
+      hideCtx()
+      item.action()
+    })
     ctxMenu.appendChild(el)
   })
 
@@ -742,6 +747,9 @@ function showCtxMenu(x, y, items) {
   ctxMenu.style.left = (x + mw > window.innerWidth ? x - mw : x) + 'px'
   ctxMenu.style.top  = (y + mh > window.innerHeight ? y - mh : y) + 'px'
 }
+
+ctxMenu.addEventListener('mousedown', e => e.stopPropagation())
+ctxMenu.addEventListener('click', e => e.stopPropagation())
 
 // ── INLINE EDITOR HELPERS ──
 function hideEditor() {
@@ -1114,6 +1122,16 @@ function renderTables() {
         rowGroup.addEventListener('mousedown', e => { e.stopPropagation(); selectTable(id, colId) })
         // Double-click to edit
         rowGroup.addEventListener('dblclick', e => { e.stopPropagation(); selectTable(id, colId); editField(id, colId) })
+        rowGroup.addEventListener('contextmenu', e => {
+          e.preventDefault()
+          e.stopPropagation()
+          selectTable(id, colId)
+          showCtxMenu(e.clientX, e.clientY, [
+            { label: 'Field', section: true },
+            { icon:'✎', label:'Edit Field', action: () => editField(id, colId) },
+            { icon:'✕', label:'Delete Field', danger: true, action: () => deleteField(id, colId) },
+          ])
+        })
 
         group.appendChild(rowGroup)
       })
@@ -1173,6 +1191,7 @@ canvasWrap.addEventListener('contextmenu', e => {
 
 // Close menus on outside click
 document.addEventListener('click', e => {
+  if (ctxMenu.contains(e.target)) return
   if (!ctxMenu.contains(e.target)) hideCtx()
   if (editorOverlay.style.display !== 'none' && !inlineEditor.contains(e.target) && !e.target.closest('.table-group')) hideEditor()
 })
