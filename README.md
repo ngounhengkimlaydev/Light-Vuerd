@@ -20,6 +20,10 @@ It opens `.json` / `.vuerd.json` files in an interactive ERD panel with draggabl
 - Use SQL type suggestions for MySQL, MariaDB, PostgreSQL, SQLite, and SQL Server.
 - Create one-to-one, one-to-many, and many-to-many relationships.
 - Display relationships with dashed lines and cardinality markers.
+- Merge duplicate table entities that refer to the same logical table.
+- Undo and redo edits with `Ctrl+Z` and `Ctrl+Shift+Z`.
+- Customize mouse buttons for moving tables, panning, and opening action menus.
+- Export the diagram as a `.sql` file using the selected SQL dialect.
 - Search tables and fields with `Ctrl+F`.
 - Zoom, pan, fit all tables, and reset the view.
 - Show table names only when zoomed out to 50% or below for easier overview.
@@ -47,7 +51,11 @@ It opens `.json` / `.vuerd.json` files in an interactive ERD panel with draggabl
 | Move a table | Left-click and drag the table |
 | Fit all tables | Click `Fit` in the toolbar |
 | Reset view | Click the reset button in the toolbar |
+| Undo | `Ctrl+Z` or the `Undo` toolbar button |
+| Redo | `Ctrl+Shift+Z` or the `Redo` toolbar button |
 | Compact overview | Zoom out to `50%` or lower |
+
+Use `Settings` in the toolbar to choose which mouse button moves tables, pans the canvas, or opens the action menu.
 
 ### Create And Edit Tables
 
@@ -84,6 +92,7 @@ Use the database selector in the toolbar to choose:
 - SQL Server
 
 The selected dialect controls the field type suggestions when adding or editing a field.
+It is also used as the default dialect for `Export SQL`.
 
 ### Create Relationships
 
@@ -118,4 +127,3 @@ Light Vuerd saves changes back to the opened ERD JSON file.
 - Table and field edits auto-save after editing.
 - Delete table and delete field actions save immediately.
 - You can also click `Save` in the toolbar.
-

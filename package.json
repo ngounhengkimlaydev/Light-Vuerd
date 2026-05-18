@@ -2,7 +2,7 @@
   "name": "light-vuerd",
   "displayName": "Light Vuerd",
   "description": "A lightweight ERD viewer for Vuerd JSON files in VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "license": "Apache-2.0",
   "icon": "media/logo.png",
   "publisher": "ngounhengkimlaydev",

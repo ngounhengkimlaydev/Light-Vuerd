@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
+import * as path from "path";
 
 export function openPanel(uri: vscode.Uri) {
   const panel = vscode.window.createWebviewPanel(
@@ -11,15 +12,29 @@ export function openPanel(uri: vscode.Uri) {
 
   const raw = fs.readFileSync(uri.fsPath, "utf8");
 
-  panel.webview.onDidReceiveMessage((message) => {
-    if (message?.type !== "saveJson") return;
-
+  panel.webview.onDidReceiveMessage(async (message) => {
     try {
-      fs.writeFileSync(uri.fsPath, message.rawJson, "utf8");
-      vscode.window.showInformationMessage("Light Vuerd: ERD JSON saved.");
+      if (message?.type === "saveJson") {
+        fs.writeFileSync(uri.fsPath, message.rawJson, "utf8");
+        vscode.window.showInformationMessage("Light Vuerd: ERD JSON saved.");
+        return;
+      }
+
+      if (message?.type === "exportSql") {
+        const fileBase = path.basename(uri.fsPath).replace(/(\.vuerd)?\.json$/i, "");
+        const dialect = String(message.dialect || "sql").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "sql";
+        const defaultUri = vscode.Uri.file(path.join(path.dirname(uri.fsPath), `${fileBase}.${dialect}.sql`));
+        const target = await vscode.window.showSaveDialog({
+          defaultUri,
+          filters: { "SQL files": ["sql"], "All files": ["*"] },
+        });
+        if (!target) return;
+        fs.writeFileSync(target.fsPath, String(message.sql || ""), "utf8");
+        vscode.window.showInformationMessage("Light Vuerd: SQL exported.");
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage("Light Vuerd: failed to save ERD JSON. " + reason);
+      vscode.window.showErrorMessage("Light Vuerd: file operation failed. " + reason);
     }
   });
 
@@ -132,6 +147,8 @@ function getHtml(rawJson: string) {
     white-space: nowrap;
   }
   .tb-btn:hover { color: var(--text0); border-color: var(--border-light); background: var(--bg3); }
+  .tb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .tb-btn:disabled:hover { color: var(--text1); border-color: var(--border); background: var(--bg2); }
   .tb-btn.primary { color: #bfdbfe; border-color: rgba(96,165,250,0.45); }
   .tb-btn.primary:hover { color: white; background: rgba(59,130,246,0.18); }
 
@@ -290,7 +307,7 @@ function getHtml(rawJson: string) {
   .table-header-bg { fill: var(--bg3); }
   .table-title { fill: var(--text0); font-size: 13px; font-weight: 700; font-family: var(--font-ui); }
   .table-subtitle { fill: var(--text2); font-size: 10px; font-family: var(--font-ui); }
-  .table-group.compact .table-title { font-size: 15px; }
+  .table-group.compact .table-title { font-weight: 800; }
   .col-name { fill: var(--text0); font-size: 11px; font-family: var(--font); }
   .col-type-text { fill: var(--text2); font-size: 10px; font-family: var(--font); }
   .col-pk-text { fill: var(--pk); font-size: 9px; font-weight: 700; font-family: var(--font-ui); }
@@ -446,6 +463,8 @@ function getHtml(rawJson: string) {
   <button class="tb-btn" onclick="zoomOut()">－</button>
   <button class="tb-btn" onclick="resetView()">⟳</button>
   <button class="tb-btn" onclick="fitAll()">⊞ Fit</button>
+  <button class="tb-btn" id="undoBtn" onclick="undoChange()" title="Undo (Ctrl+Z)">Undo</button>
+  <button class="tb-btn" id="redoBtn" onclick="redoChange()" title="Redo (Ctrl+Shift+Z)">Redo</button>
   <div class="toolbar-sep"></div>
   <!-- DB dialect selector -->
   <div class="db-select-wrap">
@@ -458,6 +477,8 @@ function getHtml(rawJson: string) {
     </select>
     <span class="db-select-arrow">▾</span>
   </div>
+  <button class="tb-btn" onclick="openSettings()">Settings</button>
+  <button class="tb-btn" onclick="exportSql()">Export SQL</button>
   <button class="tb-btn primary" onclick="saveFile()">Save</button>
   <div class="spacer"></div>
   <div class="search-wrap">
@@ -501,7 +522,7 @@ function getHtml(rawJson: string) {
         <g id="tables"></g>
       </g>
     </svg>
-    <div class="hint-bar">Right-click = menu &nbsp;·&nbsp; Dbl-click table name = rename &nbsp;·&nbsp; Dbl-click row = edit field &nbsp;·&nbsp; Dbl-click empty area = add field</div>
+    <div class="hint-bar" id="hintBar">Right-click = menu &nbsp;·&nbsp; Dbl-click table name = rename &nbsp;·&nbsp; Dbl-click row = edit field &nbsp;·&nbsp; Ctrl+Z = undo</div>
   </div>
 </div>
 
@@ -535,6 +556,9 @@ const ctxMenu = document.getElementById('ctxMenu')
 const editorOverlay = document.getElementById('editorOverlay')
 const inlineEditor = document.getElementById('inlineEditor')
 const dbDialect = document.getElementById('dbDialect')
+const undoBtn = document.getElementById('undoBtn')
+const redoBtn = document.getElementById('redoBtn')
+const hintBar = document.getElementById('hintBar')
 
 // ── DATA ──
 const collections = data.collections
@@ -544,6 +568,125 @@ const relationshipEntities = collections.relationshipEntities || (collections.re
 // Normalize references
 if (!collections.columnEntities) collections.columnEntities = columnEntities
 if (!collections.relationshipEntities) collections.relationshipEntities = relationshipEntities
+
+function normalizeIdentity(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function normalizeTableIdentity(table, key) {
+  const schema = normalizeIdentity(table.schema || table.schemaName || table.database || table.databaseName)
+  const name = normalizeIdentity(table.name || table.tableName || table.entityName)
+  const id = normalizeIdentity(table.id || key)
+  const identity = name || id
+  return identity ? schema + ':' + identity : ''
+}
+
+function normalizeColumnIdentity(col, id) {
+  const name = normalizeIdentity(col?.name || col?.columnName || col?.fieldName)
+  return name || normalizeIdentity(id)
+}
+
+function mergeColumnData(targetCol, sourceCol) {
+  if (!targetCol || !sourceCol) return
+  const sourceName = sourceCol.name || sourceCol.columnName || sourceCol.fieldName
+  if (!(targetCol.name || targetCol.columnName || targetCol.fieldName) && sourceName) targetCol.name = sourceName
+  if (!getColumnType(targetCol) && getColumnType(sourceCol)) targetCol.dataType = getColumnType(sourceCol)
+  if (sourceCol.primaryKey || sourceCol.pk) {
+    targetCol.primaryKey = true
+    targetCol.pk = true
+  }
+  if (sourceCol.notNull || sourceCol.nullable === false) {
+    targetCol.notNull = true
+    targetCol.nullable = false
+  }
+}
+
+function dedupeTableColumns(table, columnRemap) {
+  const ids = table.seqColumnIds || table.columnIds || []
+  const seen = {}
+  const nextIds = []
+
+  ids.forEach(id => {
+    const col = columnEntities[id]
+    if (!col) return
+    const identity = normalizeColumnIdentity(col, id)
+    if (identity && seen[identity]) {
+      if (seen[identity] === id) return
+      columnRemap[id] = seen[identity]
+      mergeColumnData(columnEntities[seen[identity]], col)
+      delete columnEntities[id]
+      return
+    }
+    seen[identity] = id
+    nextIds.push(id)
+  })
+
+  table.seqColumnIds = nextIds
+  table.columnIds = nextIds
+}
+
+function mergeColumnIds(targetTable, sourceTable, columnRemap) {
+  const targetIds = getTableColumnIds(targetTable)
+  const sourceIds = sourceTable.seqColumnIds || sourceTable.columnIds || []
+  sourceIds.forEach(id => {
+    if (id && !targetIds.includes(id)) targetIds.push(id)
+  })
+  dedupeTableColumns(targetTable, columnRemap)
+}
+
+function normalizeDuplicateTables() {
+  const canonicalByIdentity = {}
+  const remap = {}
+  const columnRemap = {}
+
+  Object.entries(tableEntities).forEach(([key, table]) => {
+    const identity = normalizeTableIdentity(table, key)
+    if (!identity) return
+
+    if (!canonicalByIdentity[identity]) {
+      canonicalByIdentity[identity] = key
+      remap[key] = key
+      if (table.id) remap[table.id] = key
+      return
+    }
+
+    const canonicalKey = canonicalByIdentity[identity]
+    const canonical = tableEntities[canonicalKey]
+    mergeColumnIds(canonical, table, columnRemap)
+    if (!canonical.name && table.name) canonical.name = table.name
+    if (!canonical.ui && table.ui) canonical.ui = table.ui
+    if (canonical.x == null && table.x != null) canonical.x = table.x
+    if (canonical.y == null && table.y != null) canonical.y = table.y
+    remap[key] = canonicalKey
+    if (table.id) remap[table.id] = canonicalKey
+    delete tableEntities[key]
+  })
+
+  Object.values(tableEntities).forEach(table => dedupeTableColumns(table, columnRemap))
+
+  const resolveTableRef = value => {
+    if (!value) return value
+    const canonicalKey = remap[value] || getTableEntityKey(value)
+    const canonical = tableEntities[canonicalKey]
+    return canonical?.id || canonicalKey || value
+  }
+  const resolveColumnRef = value => columnRemap[value] || value
+
+  Object.values(relationshipEntities).forEach(rel => {
+    ;['startTableId','parentTableId','sourceTableId','fromTableId','endTableId','childTableId','targetTableId','toTableId'].forEach(key => {
+      if (rel[key]) rel[key] = resolveTableRef(rel[key])
+    })
+    ;['parentColumnId','sourceColumnId','fromColumnId','childColumnId','targetColumnId','toColumnId'].forEach(key => {
+      if (rel[key]) rel[key] = resolveColumnRef(rel[key])
+    })
+    if (rel.start?.tableId) rel.start.tableId = resolveTableRef(rel.start.tableId)
+    if (rel.end?.tableId) rel.end.tableId = resolveTableRef(rel.end.tableId)
+    if (rel.start?.columnId) rel.start.columnId = resolveColumnRef(rel.start.columnId)
+    if (rel.end?.columnId) rel.end.columnId = resolveColumnRef(rel.end.columnId)
+  })
+}
+
+normalizeDuplicateTables()
 
 let tables = []
 let selectedTableId = null
@@ -594,10 +737,50 @@ function filterTypes(query) {
   return getTypes().filter(({t}) => t.toLowerCase().includes(q))
 }
 
+const DB_KEY = 'lightVuerd.dbDialect'
+const MOUSE_KEY = 'lightVuerd.mouseSettings'
+const DEFAULT_MOUSE_SETTINGS = { dragButton: 0, panButton: 1, menuButton: 2 }
+const BUTTON_OPTIONS = [
+  { value: 0, label: 'Left button' },
+  { value: 1, label: 'Middle button' },
+  { value: 2, label: 'Right button' },
+]
+
+dbDialect.value = localStorage.getItem(DB_KEY) || dbDialect.value
+dbDialect.addEventListener('change', () => localStorage.setItem(DB_KEY, dbDialect.value))
+
+function loadMouseSettings() {
+  try {
+    return { ...DEFAULT_MOUSE_SETTINGS, ...JSON.parse(localStorage.getItem(MOUSE_KEY) || '{}') }
+  } catch {
+    return { ...DEFAULT_MOUSE_SETTINGS }
+  }
+}
+
+let mouseSettings = loadMouseSettings()
+
+function saveMouseSettings(next) {
+  mouseSettings = { ...DEFAULT_MOUSE_SETTINGS, ...next }
+  localStorage.setItem(MOUSE_KEY, JSON.stringify(mouseSettings))
+  updateHint()
+}
+
+function buttonLabel(button) {
+  return BUTTON_OPTIONS.find(item => item.value === Number(button))?.label || 'Mouse button'
+}
+
+function updateHint() {
+  if (!hintBar) return
+  hintBar.innerHTML = buttonLabel(mouseSettings.menuButton) + ' = menu &nbsp;·&nbsp; ' +
+    buttonLabel(mouseSettings.dragButton) + ' drag = move table &nbsp;·&nbsp; ' +
+    buttonLabel(mouseSettings.panButton) + ' drag = pan &nbsp;·&nbsp; Ctrl+Z = undo'
+}
+
 // ── STATE ──
 let scale = 1, panX = 0, panY = 0
 let spaceDown = false, isPanning = false, dragTable = null
 let didMoveTable = false
+let dragHistoryStarted = false
 let startMouse = {x:0,y:0}, startPan = {x:0,y:0}
 let tablePositions = {}
 let searchMatches = [], activeSearchIndex = -1
@@ -615,6 +798,142 @@ function saveFile() {
 }
 window.saveFile = saveFile
 
+const undoStack = []
+const redoStack = []
+let isRestoringHistory = false
+
+function snapshotData() {
+  return JSON.stringify(data)
+}
+
+function replaceObject(target, source) {
+  Object.keys(target).forEach(key => delete target[key])
+  Object.assign(target, source || {})
+}
+
+function restoreSnapshot(snapshot) {
+  const parsed = JSON.parse(snapshot)
+  const parsedCollections = parsed.collections || {}
+
+  Object.keys(data).forEach(key => {
+    if (key !== 'collections') delete data[key]
+  })
+  Object.entries(parsed).forEach(([key, value]) => {
+    if (key !== 'collections') data[key] = value
+  })
+  data.collections = collections
+
+  Object.keys(collections).forEach(key => {
+    if (!['tableEntities','columnEntities','tableColumnEntities','relationshipEntities'].includes(key)) delete collections[key]
+  })
+  Object.entries(parsedCollections).forEach(([key, value]) => {
+    if (key === 'tableEntities') replaceObject(tableEntities, value)
+    else if (key === 'columnEntities' || key === 'tableColumnEntities') replaceObject(columnEntities, value)
+    else if (key === 'relationshipEntities') replaceObject(relationshipEntities, value)
+    else collections[key] = value
+  })
+  collections.tableEntities = tableEntities
+  collections.columnEntities = columnEntities
+  collections.tableColumnEntities = columnEntities
+  collections.relationshipEntities = relationshipEntities
+
+  normalizeDuplicateTables()
+  selectedTableId = null
+  selectedColumnId = null
+  renderAll()
+}
+
+function updateHistoryButtons() {
+  if (undoBtn) undoBtn.disabled = undoStack.length === 0
+  if (redoBtn) redoBtn.disabled = redoStack.length === 0
+}
+
+function pushHistory() {
+  if (isRestoringHistory) return
+  undoStack.push(snapshotData())
+  if (undoStack.length > 80) undoStack.shift()
+  redoStack.length = 0
+  updateHistoryButtons()
+}
+
+function undoChange() {
+  if (!undoStack.length) return
+  isRestoringHistory = true
+  redoStack.push(snapshotData())
+  restoreSnapshot(undoStack.pop())
+  isRestoringHistory = false
+  updateHistoryButtons()
+  saveFile()
+}
+
+function redoChange() {
+  if (!redoStack.length) return
+  isRestoringHistory = true
+  undoStack.push(snapshotData())
+  restoreSnapshot(redoStack.pop())
+  isRestoringHistory = false
+  updateHistoryButtons()
+  saveFile()
+}
+
+window.undoChange = undoChange
+window.redoChange = redoChange
+
+function quoteIdent(name) {
+  const text = String(name || 'unnamed').replace(new RegExp(String.fromCharCode(0), 'g'), '')
+  if (dbDialect.value === 'mysql' || dbDialect.value === 'mariadb') {
+    const tick = String.fromCharCode(96)
+    return tick + text.replace(new RegExp(tick, 'g'), tick + tick) + tick
+  }
+  if (dbDialect.value === 'mssql') return '[' + text.replace(/]/g, ']]') + ']'
+  return '"' + text.replace(/"/g, '""') + '"'
+}
+
+function defaultSqlType() {
+  if (dbDialect.value === 'postgres') return 'TEXT'
+  if (dbDialect.value === 'sqlite') return 'TEXT'
+  if (dbDialect.value === 'mssql') return 'NVARCHAR(255)'
+  return 'VARCHAR(255)'
+}
+
+function buildForeignKeys(tableId) {
+  const clauses = []
+  Object.values(relationshipEntities).forEach(rel => {
+    const ep = getRelationEndpoints(rel)
+    if (ep.endTableId !== tableId) return
+    const fromCol = rel.start?.columnId || rel.parentColumnId || rel.sourceColumnId || rel.fromColumnId
+    const toCol = rel.end?.columnId || rel.childColumnId || rel.targetColumnId || rel.toColumnId
+    if (!fromCol || !toCol || !columnEntities[fromCol] || !columnEntities[toCol]) return
+    const fromTable = getTableEntity(ep.startTableId)
+    if (!fromTable) return
+    clauses.push('  FOREIGN KEY (' + quoteIdent(getColumnName(columnEntities[toCol])) + ') REFERENCES ' + quoteIdent(fromTable.name || ep.startTableId) + ' (' + quoteIdent(getColumnName(columnEntities[fromCol])) + ')')
+  })
+  return clauses
+}
+
+function generateSql() {
+  const nl = String.fromCharCode(10)
+  const blocks = Object.entries(tableEntities).map(([tableId, table]) => {
+    const columns = getColumns(table)
+    const columnIds = getTableColumnIds(table)
+    const lines = columns.map((col, index) => {
+      const parts = ['  ' + quoteIdent(getColumnName(col)), getColumnType(col) || defaultSqlType()]
+      if (isColumnPK(col, table) && columnIds.filter(id => isColumnPK(columnEntities[id] || {}, table)).length === 1) parts.push('PRIMARY KEY')
+      return parts.join(' ')
+    })
+    const pkNames = columnIds.filter(id => isColumnPK(columnEntities[id] || {}, table)).map(id => quoteIdent(getColumnName(columnEntities[id])))
+    if (pkNames.length > 1) lines.push('  PRIMARY KEY (' + pkNames.join(', ') + ')')
+    lines.push(...buildForeignKeys(tableId))
+    return 'CREATE TABLE ' + quoteIdent(table.name || tableId) + ' (' + nl + lines.join(',' + nl) + nl + ');'
+  })
+  return '-- Light Vuerd SQL export (' + dbDialect.options[dbDialect.selectedIndex].text + ')' + nl + nl + blocks.join(nl + nl)
+}
+
+function exportSql() {
+  vscodeApi?.postMessage({ type: 'exportSql', dialect: dbDialect.value, sql: generateSql() })
+}
+window.exportSql = exportSql
+
 // ── STATS ──
 function refreshStats() {
   tables = Object.values(tableEntities)
@@ -625,10 +944,32 @@ function refreshStats() {
 
 // ── DIMENSIONS ──
 const TW = 320
+const COMPACT_TW = 460
 const ROW_H = 22
 const HEAD_H = 46
+const COMPACT_HEAD_H = 72
 
-function tableHeight(columns) { return compactMode ? HEAD_H : HEAD_H + columns.length * ROW_H + 8 }
+function zoomStableSize(screenPx, minWorld, maxWorld) {
+  const scaled = screenPx / Math.max(scale, 0.08)
+  return Math.round(Math.max(minWorld, Math.min(scaled, maxWorld)))
+}
+
+function tableWidth() {
+  return compactMode
+    ? Math.min(COMPACT_TW, 520)
+    : TW
+}
+
+function tableHeaderHeight() {
+  return compactMode
+    ? 80
+    : HEAD_H
+}
+
+function compactTitleSize() {
+  return 34
+}
+function tableHeight(columns) { return compactMode ? tableHeaderHeight() : HEAD_H + columns.length * ROW_H + 8 }
 
 // ── TRANSFORM ──
 function updateTransform() {
@@ -671,7 +1012,7 @@ function fitAll() {
   })
   const pad=60, W=canvasWrap.clientWidth, H=canvasWrap.clientHeight
   const sw=(W-pad*2)/(maxX-minX), sh=(H-pad*2)/(maxY-minY)
-  scale = Math.max(0.1,Math.min(Math.min(sw,sh),2))
+  scale = Math.max(0.50, Math.min(Math.min(sw, sh), 1.2))
   panX = pad - minX*scale; panY = pad - minY*scale
   updateTransform()
 }
@@ -833,6 +1174,41 @@ function makeTextField(container, label, value, placeholder) {
   return { getValue: () => input.value, input }
 }
 
+function makeSelectField(container, label, value, options) {
+  const wrap = document.createElement('div'); wrap.className = 'inline-field'
+  const lbl = document.createElement('label'); lbl.textContent = label; wrap.appendChild(lbl)
+  const select = document.createElement('select')
+  select.className = 'inline-input'
+  select.style.fontFamily = 'var(--font-ui)'
+  options.forEach(item => {
+    const opt = document.createElement('option')
+    opt.value = String(item.value)
+    opt.textContent = item.label
+    select.appendChild(opt)
+  })
+  select.value = String(value)
+  wrap.appendChild(select); container.appendChild(wrap)
+  return { getValue: () => Number(select.value), select }
+}
+
+function openSettings() {
+  showEditor(container => {
+    const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Mouse Settings'; container.appendChild(title)
+    const dragField = makeSelectField(container, 'Move table', mouseSettings.dragButton, BUTTON_OPTIONS)
+    const panField = makeSelectField(container, 'Pan canvas', mouseSettings.panButton, BUTTON_OPTIONS)
+    const menuField = makeSelectField(container, 'Open action menu', mouseSettings.menuButton, BUTTON_OPTIONS)
+    makeActions(container, () => {
+      saveMouseSettings({
+        dragButton: dragField.getValue(),
+        panButton: panField.getValue(),
+        menuButton: menuField.getValue(),
+      })
+    }, null, 'Apply')
+    setTimeout(() => dragField.select.focus(), 50)
+  })
+}
+window.openSettings = openSettings
+
 function makeActions(container, onConfirm, onCancel, confirmLabel) {
   const wrap = document.createElement('div'); wrap.className = 'inline-actions'
   const cancel = document.createElement('button'); cancel.className = 'inline-btn'; cancel.textContent = 'Cancel'
@@ -872,6 +1248,7 @@ function createTable(worldX, worldY) {
     makeActions(container, () => {
       const name = nameField.getValue().trim()
       if (!name) return
+      pushHistory()
       const id = makeId('table', tableEntities)
       tableEntities[id] = {
         id, name,
@@ -895,6 +1272,7 @@ function renameTable(tableId) {
     makeActions(container, () => {
       const name = nameField.getValue().trim()
       if (!name) return
+      pushHistory()
       table.name = name
       renderAll(); selectTable(tableId); scheduleSave()
     })
@@ -905,6 +1283,7 @@ function renameTable(tableId) {
 function deleteTable(tableId) {
   const key = getTableEntityKey(tableId)
   const table = tableEntities[key]; if (!table) return
+  pushHistory()
   const columnIds = [...getTableColumnIds(table)]
   columnIds.forEach(id => delete columnEntities[id])
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
@@ -925,6 +1304,7 @@ function addField(tableId) {
     makeActions(container, () => {
       const name = nameField.getValue().trim()
       if (!name) return
+      pushHistory()
       const id = makeId('column', columnEntities)
       columnEntities[id] = { id, name, dataType: typeField.getValue().trim() }
       getTableColumnIds(table).push(id)
@@ -941,6 +1321,7 @@ function editField(tableId, columnId) {
     const nameField = makeTextField(container, 'Field Name', getColumnName(col), '')
     const typeField = makeTypeField(container, getColumnType(col))
     makeActions(container, () => {
+      pushHistory()
       col.name = nameField.getValue().trim()
       col.dataType = typeField.getValue().trim()
       renderAll(); selectTable(tableId, columnId); scheduleSave()
@@ -952,6 +1333,7 @@ function editField(tableId, columnId) {
 function deleteField(tableId, columnId) {
   const key = getTableEntityKey(tableId)
   const table = tableEntities[key]; const col = columnEntities[columnId]; if (!table || !col) return
+  pushHistory()
   const ids = getTableColumnIds(table).filter(id => id !== columnId)
   table.seqColumnIds = ids; table.columnIds = ids
   Object.entries(relationshipEntities).forEach(([rid, rel]) => {
@@ -963,10 +1345,12 @@ function deleteField(tableId, columnId) {
 }
 
 function addRelationship(fromTableId) {
-  const tableList = Object.values(tableEntities).filter(t => t.id !== fromTableId)
+  const tableList = Object.entries(tableEntities)
+    .filter(([key]) => key !== getTableEntityKey(fromTableId))
+    .map(([key, table]) => ({ key, table }))
   if (!tableList.length) { alert('Need at least 2 tables to create a relationship.'); return }
 
-  let selectedType = '1-m', selectedToId = tableList[0].id
+  let selectedType = '1-m', selectedToId = tableList[0].key
 
   showEditor(container => {
     const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Add Relationship'; container.appendChild(title)
@@ -982,8 +1366,8 @@ function addRelationship(fromTableId) {
     const toLbl = document.createElement('label'); toLbl.textContent = 'To Table'; toWrap.appendChild(toLbl)
     const toSel = document.createElement('select'); toSel.className = 'inline-input'
     toSel.style.fontFamily = 'var(--font-ui)'
-    tableList.forEach(t => {
-      const opt = document.createElement('option'); opt.value = t.id; opt.textContent = t.name||t.id; toSel.appendChild(opt)
+    tableList.forEach(({ key, table }) => {
+      const opt = document.createElement('option'); opt.value = key; opt.textContent = table.name||key; toSel.appendChild(opt)
     })
     toSel.addEventListener('change', () => selectedToId = toSel.value)
     toWrap.appendChild(toSel); container.appendChild(toWrap)
@@ -1013,6 +1397,7 @@ function addRelationship(fromTableId) {
     container.appendChild(picker)
 
     makeActions(container, () => {
+      pushHistory()
       const typeMap = { '1-1': 'OneToOne', '1-m': 'OneToMany', 'm-m': 'ManyToMany' }
       const id = makeId('rel', relationshipEntities)
       relationshipEntities[id] = {
@@ -1045,17 +1430,72 @@ function svgText(x, y, cls, content, extra={}) {
   el.textContent = content; return el
 }
 
+function showFieldMenu(x, y, tableId, columnId) {
+  showCtxMenu(x, y, [
+    { label: 'Field', section: true },
+    { icon:'Edit', label:'Edit Field', action: () => editField(tableId, columnId) },
+    { icon:'Del', label:'Delete Field', danger: true, action: () => deleteField(tableId, columnId) },
+  ])
+}
+
+function showTableMenu(x, y, tableId) {
+  showCtxMenu(x, y, [
+    { label: 'Table', section: true },
+    { icon:'Name', label:'Rename Table', action: () => renameTable(tableId) },
+    { icon:'Link', label:'Add Relationship', action: () => addRelationship(tableId) },
+    '---',
+    { label: 'Fields', section: true },
+    { icon:'+', label:'Add Field', action: () => addField(tableId) },
+    { icon:'Edit', label:'Edit Selected Field', action: () => { if (selectedColumnId) editField(tableId, selectedColumnId); else alert('Click a field first.') } },
+    { icon:'Del', label:'Delete Selected Field', danger: true, action: () => { if (selectedColumnId) deleteField(tableId, selectedColumnId); else alert('Click a field first.') } },
+    '---',
+    { icon:'Del', label:'Delete Table', danger: true, action: () => deleteTable(tableId) },
+  ])
+}
+
+function showCanvasMenu(x, y, world) {
+  showCtxMenu(x, y, [
+    { icon:'+', label:'Create New Table', hint:'here', action: () => createTable(world.x, world.y) },
+    '---',
+    { icon:'Fit', label:'Fit All', action: fitAll },
+    { icon:'View', label:'Reset View', action: resetView },
+    '---',
+    { icon:'SQL', label:'Export SQL', action: exportSql },
+    { icon:'', label:'Save', action: saveFile },
+  ])
+}
+
+function showMenuForEvent(e) {
+  const tableGroup = e.target.closest?.('.table-group')
+  const row = e.target.closest?.('.field-row')
+  if (row && tableGroup) {
+    const tableId = tableGroup.dataset.id
+    const columnId = row.dataset.columnId
+    selectTable(tableId, columnId)
+    showFieldMenu(e.clientX, e.clientY, tableId, columnId)
+    return
+  }
+  if (tableGroup) {
+    const tableId = tableGroup.dataset.id
+    selectTable(tableId)
+    showTableMenu(e.clientX, e.clientY, tableId)
+    return
+  }
+  showCanvasMenu(e.clientX, e.clientY, screenToWorld(e.clientX, e.clientY))
+}
+
 // ── RENDER TABLES ──
 function renderTables() {
   tablesLayer.innerHTML = ''
+  tablePositions = {}
   const COLS_PER_ROW = Math.ceil(Math.sqrt(Math.max(tables.length, 1)))
 
-  tables.forEach((table, index) => {
-    const id = table.id || Object.keys(tableEntities)[index]
+  Object.entries(tableEntities).forEach(([id, table], index) => {
     const columns = getColumns(table)
-    const width = TW, height = tableHeight(columns)
+    const width = tableWidth(), height = tableHeight(columns)
+    const headerHeight = tableHeaderHeight()
 
-    const defaultX = 40 + (index % COLS_PER_ROW) * (TW + 60)
+    const defaultX = 40 + (index % COLS_PER_ROW) * (tableWidth() + 60)
     const defaultY = 40 + Math.floor(index / COLS_PER_ROW) * (height + 60)
     const x = table.ui?.x ?? table.x ?? defaultX
     const y = table.ui?.y ?? table.y ?? defaultY
@@ -1073,12 +1513,14 @@ function renderTables() {
     // Body
     group.appendChild(ns('rect', {width, height, rx:10, class:'table-bg'}))
     // Header
-    group.appendChild(ns('rect', {width, height:HEAD_H, rx:10, class:'table-header-bg'}))
-    group.appendChild(ns('rect', {y:HEAD_H-10, width, height:10, class:'table-header-bg'}))
-    group.appendChild(ns('line', {x1:0, y1:HEAD_H, x2:width, y2:HEAD_H, stroke:'var(--border-light)', 'stroke-width':0.5}))
+    group.appendChild(ns('rect', {width, height:headerHeight, rx:10, class:'table-header-bg'}))
+    group.appendChild(ns('rect', {y:headerHeight-10, width, height:10, class:'table-header-bg'}))
+    group.appendChild(ns('line', {x1:0, y1:headerHeight, x2:width, y2:headerHeight, stroke:'var(--border-light)', 'stroke-width':0.5}))
 
     // Table name (double-click to rename)
-    const titleEl = svgText(14, compactMode ? 28 : 22, 'table-title', table.name || 'table')
+    const titleSize = compactMode ? compactTitleSize() : 13
+    const titleEl = svgText(compactMode ? 24 : 14, compactMode ? Math.round(headerHeight / 2 + titleSize / 3) : 22, 'table-title', table.name || 'table')
+    titleEl.style.fontSize = titleSize + 'px'
     titleEl.style.cursor = 'text'
     titleEl.addEventListener('dblclick', e => { e.stopPropagation(); renameTable(id) })
     group.appendChild(titleEl)
@@ -1139,6 +1581,7 @@ function renderTables() {
         rowGroup.addEventListener('contextmenu', e => {
           e.preventDefault()
           e.stopPropagation()
+          if (mouseSettings.menuButton !== 2) return
           selectTable(id, colId)
           showCtxMenu(e.clientX, e.clientY, [
             { label: 'Field', section: true },
@@ -1162,6 +1605,7 @@ function renderTables() {
     // Right-click on table
     group.addEventListener('contextmenu', e => {
       e.preventDefault(); e.stopPropagation()
+      if (mouseSettings.menuButton !== 2) return
       selectTable(id)
       showCtxMenu(e.clientX, e.clientY, [
         { label: 'Table', section: true },
@@ -1192,6 +1636,7 @@ canvasWrap.addEventListener('contextmenu', e => {
   // If we clicked on a table group, the table handler fires; here we handle canvas
   if (e.target.closest('.table-group')) return
   e.preventDefault()
+  if (mouseSettings.menuButton !== 2) return
   const world = screenToWorld(e.clientX, e.clientY)
   showCtxMenu(e.clientX, e.clientY, [
     { icon:'＋', label:'Create New Table', hint:'here', action: () => createTable(world.x, world.y) },
@@ -1203,10 +1648,19 @@ canvasWrap.addEventListener('contextmenu', e => {
   ])
 })
 
+document.addEventListener('mousedown', e => {
+  if (mouseSettings.menuButton === 2 || e.button !== mouseSettings.menuButton) return
+  if (!canvasWrap.contains(e.target)) return
+  e.preventDefault()
+  e.stopPropagation()
+  showMenuForEvent(e)
+}, true)
+
 // Close menus on outside click
 document.addEventListener('click', e => {
   if (ctxMenu.contains(e.target)) return
   if (!ctxMenu.contains(e.target)) hideCtx()
+  if (e.target.closest('.toolbar')) return
   if (editorOverlay.style.display !== 'none' && !inlineEditor.contains(e.target) && !e.target.closest('.table-group')) hideEditor()
 })
 document.addEventListener('keydown', e => {
@@ -1428,6 +1882,13 @@ function renderRelations() {
 svg.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX,e.clientY,e.deltaY<0?1.1:0.91) }, {passive:false})
 
 window.addEventListener('keydown', e => {
+  const typingTarget = ['INPUT','TEXTAREA','SELECT'].includes(e.target?.tagName)
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z' && !typingTarget) {
+    e.preventDefault()
+    if (e.shiftKey) redoChange()
+    else undoChange()
+    return
+  }
   if ((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f') { e.preventDefault(); searchInput.focus(); searchInput.select(); return }
   if (e.target===searchInput) return
   if (e.code==='Space') { spaceDown=true; e.preventDefault() }
@@ -1436,13 +1897,14 @@ window.addEventListener('keyup', e => { if(e.code==='Space') spaceDown=false })
 
 svg.addEventListener('mousedown', e => {
   const tg = e.target.closest?.('.table-group')
-  if (tg && !spaceDown && e.button===0) {
+  if (tg && !spaceDown && e.button===mouseSettings.dragButton) {
     dragTable=tg; didMoveTable=false
+    pushHistory(); dragHistoryStarted=true
     const id=tg.dataset.id
     const w=screenToWorld(e.clientX,e.clientY)
     startMouse=w; startPan={x:tablePositions[id].x,y:tablePositions[id].y}; return
   }
-  if (e.button===1||spaceDown) {
+  if (e.button===mouseSettings.panButton || (spaceDown && e.button===0)) {
     isPanning=true; canvasWrap.classList.add('panning')
     startMouse={x:e.clientX,y:e.clientY}; startPan={x:panX,y:panY}; e.preventDefault()
   }
@@ -1470,7 +1932,9 @@ window.addEventListener('mousemove', e => {
 
 window.addEventListener('mouseup', () => {
   if (dragTable && didMoveTable) scheduleSave()
+  if (dragTable && !didMoveTable && dragHistoryStarted) { undoStack.pop(); updateHistoryButtons() }
   isPanning=false; dragTable=null; didMoveTable=false
+  dragHistoryStarted=false
   canvasWrap.classList.remove('panning')
 })
 
@@ -1478,6 +1942,8 @@ svg.addEventListener('auxclick', e => e.preventDefault())
 
 // ── INIT ──
 refreshStats()
+updateHint()
+updateHistoryButtons()
 renderTables()
 renderRelations()
 setTimeout(fitAll, 50)
