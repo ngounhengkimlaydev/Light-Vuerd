@@ -310,6 +310,9 @@ function getHtml(rawJson: string) {
   .table-group.compact .table-title { font-weight: 800; }
   .col-name { fill: var(--text0); font-size: 11px; font-family: var(--font); }
   .col-type-text { fill: var(--text2); font-size: 10px; font-family: var(--font); }
+  .col-nullable-text { fill: var(--purple); font-size: 9px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
+  .col-notnull-text { fill: var(--rose); font-size: 9px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
+  .col-comment-text { fill: var(--text2); font-size: 9px; font-style: italic; font-family: var(--font-ui); }
   .col-pk-text { fill: var(--pk); font-size: 9px; font-weight: 700; font-family: var(--font-ui); }
   .col-fk-text { fill: var(--fk); font-size: 9px; font-weight: 700; font-family: var(--font-ui); }
   .rel-path-1-1 { stroke: var(--rel-1-1); stroke-width: 1.5; fill: none; opacity: 0.7; }
@@ -365,7 +368,7 @@ function getHtml(rawJson: string) {
     border-radius: 6px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 0 3px var(--accent-glow);
     padding: 10px;
-    min-width: 280px;
+    min-width: 300px;
     z-index: 600;
     animation: editorIn 0.12s ease;
   }
@@ -387,6 +390,28 @@ function getHtml(rawJson: string) {
     width: 100%;
   }
   .inline-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+
+  /* Nullable toggle row */
+  .nullable-toggle-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    padding: 6px 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: 5px;
+  }
+  .nullable-toggle-row label { font-size: 11px; color: var(--text1); flex: 1; cursor: pointer; user-select: none; }
+  .toggle-switch {
+    position: relative; width: 34px; height: 18px; flex-shrink: 0;
+  }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle-track {
+    position: absolute; inset: 0; border-radius: 9px; background: var(--bg3);
+    border: 1px solid var(--border); transition: background 0.2s, border-color 0.2s; cursor: pointer;
+  }
+  .toggle-track::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--text2);
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle-switch input:checked + .toggle-track { background: rgba(167,139,250,0.25); border-color: var(--purple); }
+  .toggle-switch input:checked + .toggle-track::after { transform: translateX(16px); background: var(--purple); }
 
   /* Type autocomplete */
   .type-combo { position: relative; }
@@ -917,8 +942,13 @@ function generateSql() {
     const columns = getColumns(table)
     const columnIds = getTableColumnIds(table)
     const lines = columns.map((col, index) => {
+      const colId = columnIds[index]
+      const nullable = isColumnNullable(col)
       const parts = ['  ' + quoteIdent(getColumnName(col)), getColumnType(col) || defaultSqlType()]
       if (isColumnPK(col, table) && columnIds.filter(id => isColumnPK(columnEntities[id] || {}, table)).length === 1) parts.push('PRIMARY KEY')
+      if (!nullable) parts.push('NOT NULL')
+      const comment = getColumnComment(col)
+      if (comment && (dbDialect.value === 'mysql' || dbDialect.value === 'mariadb')) parts.push('COMMENT ' + "'" + comment.replace(/'/g, "\\'") + "'")
       return parts.join(' ')
     })
     const pkNames = columnIds.filter(id => isColumnPK(columnEntities[id] || {}, table)).map(id => quoteIdent(getColumnName(columnEntities[id])))
@@ -943,11 +973,21 @@ function refreshStats() {
 }
 
 // ── DIMENSIONS ──
-const TW = 320
-const COMPACT_TW = 460
-const ROW_H = 22
-const HEAD_H = 46
+// Spreadsheet-style: one row per field, fixed columns: badge|name|type|null|default|comment
+const TW = 580          // wider to fit all columns
+const COMPACT_TW = 580
+const ROW_H = 22        // single-line row height
+const HEAD_H = 46       // table header (name + subtitle)
+const COL_HDR_H = 18    // column-labels sub-header height
 const COMPACT_HEAD_H = 72
+
+// Fixed column X positions (left edges)
+const CX_BADGE  = 0      // 0..32  icon/badge zone
+const CX_NAME   = 32     // field name
+const CX_TYPE   = 160    // data type
+const CX_NULL   = 258    // NULL / N-N
+const CX_DFLT   = 306    // default value
+const CX_CMT    = 380    // comment (stretches to end)
 
 function zoomStableSize(screenPx, minWorld, maxWorld) {
   const scaled = screenPx / Math.max(scale, 0.08)
@@ -955,21 +995,18 @@ function zoomStableSize(screenPx, minWorld, maxWorld) {
 }
 
 function tableWidth() {
-  return compactMode
-    ? Math.min(COMPACT_TW, 520)
-    : TW
+  return compactMode ? Math.min(COMPACT_TW, 580) : TW
 }
 
 function tableHeaderHeight() {
-  return compactMode
-    ? 80
-    : HEAD_H
+  return compactMode ? 80 : HEAD_H
 }
 
-function compactTitleSize() {
-  return 34
+function compactTitleSize() { return 34 }
+
+function tableHeight(columns) {
+  return compactMode ? tableHeaderHeight() : HEAD_H + COL_HDR_H + columns.length * ROW_H + 6
 }
-function tableHeight(columns) { return compactMode ? tableHeaderHeight() : HEAD_H + columns.length * ROW_H + 8 }
 
 // ── TRANSFORM ──
 function updateTransform() {
@@ -1042,6 +1079,15 @@ function getColumns(table) {
 }
 function getColumnName(col) { return col.name || col.columnName || col.fieldName || 'field' }
 function getColumnType(col) { return col.dataType || col.type || col.data_type || '' }
+function getColumnComment(col) { return col.comment || col.description || col.remarks || '' }
+
+// Nullable: default true (nullable) unless explicitly set to false / notNull=true
+function isColumnNullable(col) {
+  if (col.nullable === false || col.notNull === true || col.not_null === true || col.required === true) return false
+  if (col.nullable === true) return true
+  return true // default nullable
+}
+
 function isColumnPK(col, table) {
   const name = getColumnName(col).toLowerCase()
   return col.primaryKey || col.pk || name === 'id' || name === (table.name||'').toLowerCase()+'_id'
@@ -1104,7 +1150,7 @@ function showEditor(content) {
   editorOverlay.style.display = 'block'
   // Position near center
   const W = window.innerWidth, H = window.innerHeight
-  const ew = 300
+  const ew = 320
   inlineEditor.style.left = ((W - ew) / 2) + 'px'
   inlineEditor.style.top  = '120px'
   inlineEditor.style.width = ew + 'px'
@@ -1189,6 +1235,30 @@ function makeSelectField(container, label, value, options) {
   select.value = String(value)
   wrap.appendChild(select); container.appendChild(wrap)
   return { getValue: () => Number(select.value), select }
+}
+
+// ── NEW: Nullable toggle field ──
+function makeNullableField(container, initialValue) {
+  const togId = 'nullableToggle_' + Math.random().toString(36).slice(2)
+  const row = document.createElement('div'); row.className = 'nullable-toggle-row'
+  const lbl = document.createElement('label'); lbl.textContent = 'Nullable'; lbl.htmlFor = togId
+  const sw = document.createElement('label'); sw.className = 'toggle-switch'
+  const inp = document.createElement('input'); inp.type = 'checkbox'; inp.id = togId; inp.checked = initialValue
+  const track = document.createElement('span'); track.className = 'toggle-track'
+  sw.appendChild(inp); sw.appendChild(track)
+  row.appendChild(lbl); row.appendChild(sw)
+  container.appendChild(row)
+  return { getValue: () => inp.checked, input: inp }
+}
+
+// ── NEW: Comment field ──
+function makeCommentField(container, initialValue) {
+  const wrap = document.createElement('div'); wrap.className = 'inline-field'
+  const lbl = document.createElement('label'); lbl.textContent = 'Comment / Description'; wrap.appendChild(lbl)
+  const input = document.createElement('input')
+  input.className = 'inline-input'; input.value = initialValue||''; input.placeholder = 'Optional column comment…'
+  wrap.appendChild(input); container.appendChild(wrap)
+  return { getValue: () => input.value, input }
 }
 
 function openSettings() {
@@ -1301,12 +1371,22 @@ function addField(tableId) {
     const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Add Field'; container.appendChild(title)
     const nameField = makeTextField(container, 'Field Name', '', 'e.g. email')
     const typeField = makeTypeField(container, 'VARCHAR(255)')
+    const nullableField = makeNullableField(container, true)
+    const defaultField = makeTextField(container, 'Default Value', '', 'e.g. 0 or NULL or now()')
+    const commentField = makeCommentField(container, '')
     makeActions(container, () => {
       const name = nameField.getValue().trim()
       if (!name) return
       pushHistory()
       const id = makeId('column', columnEntities)
-      columnEntities[id] = { id, name, dataType: typeField.getValue().trim() }
+      columnEntities[id] = {
+        id, name,
+        dataType: typeField.getValue().trim(),
+        nullable: nullableField.getValue(),
+        notNull: !nullableField.getValue(),
+        default: defaultField.getValue().trim(),
+        comment: commentField.getValue().trim()
+      }
       getTableColumnIds(table).push(id)
       renderAll(); selectTable(key, id); scheduleSave()
     })
@@ -1320,10 +1400,17 @@ function editField(tableId, columnId) {
     const title = document.createElement('div'); title.className = 'inline-editor-title'; title.textContent = 'Edit Field'; container.appendChild(title)
     const nameField = makeTextField(container, 'Field Name', getColumnName(col), '')
     const typeField = makeTypeField(container, getColumnType(col))
+    const nullableField = makeNullableField(container, isColumnNullable(col))
+    const defaultField = makeTextField(container, 'Default Value', String(col.default ?? col.defaultValue ?? col.default_value ?? ''), 'e.g. 0 or NULL')
+    const commentField = makeCommentField(container, getColumnComment(col))
     makeActions(container, () => {
       pushHistory()
       col.name = nameField.getValue().trim()
       col.dataType = typeField.getValue().trim()
+      col.nullable = nullableField.getValue()
+      col.notNull = !nullableField.getValue()
+      col.default = defaultField.getValue().trim()
+      col.comment = commentField.getValue().trim()
       renderAll(); selectTable(tableId, columnId); scheduleSave()
     })
     setTimeout(() => { nameField.input.focus(); nameField.input.select() }, 50)
@@ -1502,7 +1589,7 @@ function renderTables() {
 
     tablePositions[id] = {
       x, y, width, height, table,
-      searchText: [table.name, ...columns.map(c => getColumnName(c)+' '+getColumnType(c))].filter(Boolean).join(' ').toLowerCase()
+      searchText: [table.name, ...columns.map(c => getColumnName(c)+' '+getColumnType(c)+' '+getColumnComment(c))].filter(Boolean).join(' ').toLowerCase()
     }
 
     const groupClasses = ['table-group', ...(compactMode ? ['compact'] : []), ...(selectedTableId === id ? ['selected'] : [])]
@@ -1536,51 +1623,129 @@ function renderTables() {
       group.appendChild(addBtn)
     }
 
-    // Columns
+    // ── Spreadsheet-style column layout (only when not compact) ──
     if (!compactMode) {
+      // ── Column header bar ──
+      const hdrY = HEAD_H
+      group.appendChild(ns('rect', {x:0, y:hdrY, width, height:COL_HDR_H, fill:'rgba(9,14,26,0.85)'}))
+      group.appendChild(ns('line', {x1:0, y1:hdrY+COL_HDR_H, x2:width, y2:hdrY+COL_HDR_H, stroke:'var(--border)', 'stroke-width':0.5}))
+
+      // Header labels
+      const hdrTextY = hdrY + 13
+      const hdrStyle = {'font-size':'9', 'font-weight':'700', 'letter-spacing':'0.08em', 'text-transform':'uppercase', 'font-family':'var(--font-ui)'}
+
+      // Vertical column dividers in header
+      const dividerCols = [CX_TYPE, CX_NULL, CX_DFLT, CX_CMT]
+      dividerCols.forEach(cx => {
+        group.appendChild(ns('line', {x1:cx, y1:hdrY+2, x2:cx, y2:hdrY+COL_HDR_H-2, stroke:'var(--border)', 'stroke-width':0.5}))
+      })
+
+      // Header text labels
+      group.appendChild(svgText(CX_NAME + 4, hdrTextY, 'table-subtitle', 'column', hdrStyle))
+      group.appendChild(svgText(CX_TYPE + 4, hdrTextY, 'table-subtitle', 'dataType', hdrStyle))
+      group.appendChild(svgText(CX_NULL + 4, hdrTextY, 'table-subtitle', 'null', hdrStyle))
+      group.appendChild(svgText(CX_DFLT + 4, hdrTextY, 'table-subtitle', 'default', hdrStyle))
+      group.appendChild(svgText(CX_CMT  + 4, hdrTextY, 'table-subtitle', 'comment', hdrStyle))
+
+      // ── Data rows ──
+      const rowsStartY = HEAD_H + COL_HDR_H
+
       columns.forEach((col, i) => {
-        const cy = HEAD_H + 4 + i * ROW_H
+        const cy = rowsStartY + i * ROW_H
         const colId = (table.seqColumnIds || table.columnIds || [])[i]
         const isPK = isColumnPK(col, table)
         const isFK = !isPK && isColumnFK(colId)
+        const nullable = isColumnNullable(col)
+        const comment = getColumnComment(col)
+        const defaultVal = col.default ?? col.defaultValue ?? col.default_value ?? ''
+        const textY = cy + ROW_H - 7   // baseline inside 22px row
 
         const rowGroup = ns('g', {
           class: selectedColumnId === colId ? 'field-row selected' : 'field-row',
           'data-column-id': colId
         })
 
-        // Row bg
-        const rowBg = ns('rect', {class:'field-row-bg', x:0, y:cy, width, height:ROW_H, fill: i%2===0 ? 'rgba(26,34,54,0)' : 'rgba(13,18,30,0.4)'})
-        rowGroup.appendChild(rowBg)
+        // Row bg (alternating)
+        rowGroup.appendChild(ns('rect', {
+          class:'field-row-bg', x:0, y:cy, width, height:ROW_H,
+          fill: i%2===0 ? 'rgba(26,34,54,0)' : 'rgba(10,15,28,0.55)'
+        }))
 
-        // Separator
-        if (i < columns.length - 1) {
-          rowGroup.appendChild(ns('line', {x1:8, y1:cy+ROW_H, x2:width-8, y2:cy+ROW_H, stroke:'var(--border)', 'stroke-width':0.3, opacity:'0.5'}))
-        }
+        // Row separator line
+        rowGroup.appendChild(ns('line', {
+          x1:0, y1:cy+ROW_H, x2:width, y2:cy+ROW_H,
+          stroke:'var(--border)', 'stroke-width':0.3, opacity:'0.4'
+        }))
 
-        const textY = cy + ROW_H - 7
+        // Vertical column dividers (matching header)
+        dividerCols.forEach(cx => {
+          rowGroup.appendChild(ns('line', {
+            x1:cx, y1:cy+3, x2:cx, y2:cy+ROW_H-3,
+            stroke:'var(--border)', 'stroke-width':0.35, opacity:'0.5'
+          }))
+        })
 
-        // Badge
+        // ── Badge column (PK key icon or FK or dot) ──
         if (isPK) {
-          rowGroup.appendChild(ns('rect', {x:10, y:cy+4, width:20, height:14, rx:3, fill:'rgba(245,158,11,0.12)', stroke:'rgba(245,158,11,0.3)', 'stroke-width':0.5}))
-          rowGroup.appendChild(svgText(20, cy+14, 'col-pk-text', 'PK', {'text-anchor':'middle'}))
+          // Key icon — small 🔑 substitute using SVG rect+line
+          const bx = 8, by = cy + 5
+          // key ring
+          rowGroup.appendChild(ns('circle', {cx: bx+5, cy: by+5, r:'4', fill:'none', stroke:'var(--pk)', 'stroke-width':'1.5'}))
+          // key shaft
+          rowGroup.appendChild(ns('rect', {x:bx+7, y:by+5, width:10, height:2, rx:1, fill:'var(--pk)'}))
+          rowGroup.appendChild(ns('rect', {x:bx+13, y:by+7, width:2, height:3, rx:1, fill:'var(--pk)'}))
+          rowGroup.appendChild(ns('rect', {x:bx+16, y:by+7, width:2, height:3, rx:1, fill:'var(--pk)'}))
         } else if (isFK) {
-          rowGroup.appendChild(ns('rect', {x:10, y:cy+4, width:20, height:14, rx:3, fill:'rgba(96,165,250,0.1)', stroke:'rgba(96,165,250,0.25)', 'stroke-width':0.5}))
-          rowGroup.appendChild(svgText(20, cy+14, 'col-fk-text', 'FK', {'text-anchor':'middle'}))
+          rowGroup.appendChild(ns('rect', {x:8, y:cy+5, width:16, height:12, rx:2, fill:'rgba(96,165,250,0.1)', stroke:'rgba(96,165,250,0.3)', 'stroke-width':'1'}))
+          rowGroup.appendChild(svgText(16, cy+14, 'col-fk-text', 'FK', {'text-anchor':'middle'}))
         } else {
-          rowGroup.appendChild(ns('circle', {cx:20, cy:cy+11, r:2, fill:'var(--border-light)'}))
+          rowGroup.appendChild(ns('circle', {cx:16, cy:cy+11, r:2, fill:'var(--border-light)'}))
         }
 
-        rowGroup.appendChild(svgText(38, textY, 'col-name', getColumnName(col)))
-        rowGroup.appendChild(svgText(width-10, textY, 'col-type-text', getColumnType(col), {'text-anchor':'end'}))
+        // ── column name ──
+        rowGroup.appendChild(svgText(CX_NAME + 4, textY, 'col-name', getColumnName(col), {'clip-path': null}))
 
-        // Click to select
+        // ── data type ──
+        const typeStr = getColumnType(col) || ''
+        rowGroup.appendChild(svgText(CX_TYPE + 4, textY, 'col-type-text', typeStr))
+
+        // ── nullable — clickable toggle ──
+        const nullLabel = nullable ? 'NULL' : 'N-N'
+        const nullCls   = nullable ? 'col-nullable-text' : 'col-notnull-text'
+        const nullEl = svgText(CX_NULL + 4, textY, nullCls, nullLabel)
+        nullEl.style.cursor = 'pointer'
+        nullEl.setAttribute('title', nullable ? 'Click to set NOT NULL' : 'Click to set NULL')
+        nullEl.addEventListener('click', e => {
+          e.stopPropagation()
+          pushHistory()
+          col.nullable = !nullable
+          col.notNull = nullable
+          renderAll(); selectTable(id, colId); scheduleSave()
+        })
+        nullEl.addEventListener('mouseenter', () => nullEl.setAttribute('opacity','0.65'))
+        nullEl.addEventListener('mouseleave', () => nullEl.setAttribute('opacity','1'))
+        rowGroup.appendChild(nullEl)
+
+        // ── default value ──
+        const dfltStr = String(defaultVal ?? '').trim()
+        if (dfltStr) {
+          rowGroup.appendChild(svgText(CX_DFLT + 4, textY, 'col-type-text', dfltStr))
+        } else {
+          rowGroup.appendChild(svgText(CX_DFLT + 4, textY, 'col-comment-text', 'default'))
+        }
+
+        // ── comment (stretches to end, truncated) ──
+        if (comment) {
+          const maxChars = Math.floor((width - CX_CMT - 8) / 6.2)
+          const cmtTrunc = comment.length > maxChars ? comment.slice(0, maxChars - 1) + '…' : comment
+          rowGroup.appendChild(svgText(CX_CMT + 4, textY, 'col-comment-text', cmtTrunc))
+        }
+
+        // ── mouse events ──
         rowGroup.addEventListener('mousedown', e => { e.stopPropagation(); selectTable(id, colId) })
-        // Double-click to edit
         rowGroup.addEventListener('dblclick', e => { e.stopPropagation(); selectTable(id, colId); editField(id, colId) })
         rowGroup.addEventListener('contextmenu', e => {
-          e.preventDefault()
-          e.stopPropagation()
+          e.preventDefault(); e.stopPropagation()
           if (mouseSettings.menuButton !== 2) return
           selectTable(id, colId)
           showCtxMenu(e.clientX, e.clientY, [
@@ -1593,11 +1758,9 @@ function renderTables() {
         group.appendChild(rowGroup)
       })
 
-      // Double-click on empty table body area → add field
-      const emptyZone = ns('rect', {
-        x:0, y: HEAD_H + 4 + columns.length * ROW_H, width, height: 12,
-        fill:'transparent', style:'cursor:copy'
-      })
+      // Double-click on empty zone at bottom → add field
+      const emptyZoneY = rowsStartY + columns.length * ROW_H
+      const emptyZone = ns('rect', {x:0, y:emptyZoneY, width, height:10, fill:'transparent', style:'cursor:copy'})
       emptyZone.addEventListener('dblclick', e => { e.stopPropagation(); selectTable(id); addField(id) })
       group.appendChild(emptyZone)
     }
@@ -1687,7 +1850,8 @@ function renderSidebar() {
       const type = isPK ? 'pk' : isFK ? 'fk' : 'col'
       const label = isPK ? 'PK' : isFK ? 'FK' : '·'
       if (selectedColumnId === colId) div.style.color = 'var(--accent2)'
-      div.innerHTML = '<span class="col-badge '+type+'">'+label+'</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(getColumnName(col))+'</span><span class="col-type">'+escapeHtml(getColumnType(col))+'</span>'
+      const nullTag = isColumnNullable(col) ? '<span style="color:var(--purple);font-size:9px;margin-left:2px">NULL</span>' : '<span style="color:var(--rose);font-size:9px;margin-left:2px">NN</span>'
+      div.innerHTML = '<span class="col-badge '+type+'">'+label+'</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(getColumnName(col))+'</span>' + nullTag + '<span class="col-type">'+escapeHtml(getColumnType(col))+'</span>'
       div.addEventListener('click', e => { e.stopPropagation(); selectTable(tableId, colId); focusTable(tableId) })
       cols.appendChild(div)
     })
