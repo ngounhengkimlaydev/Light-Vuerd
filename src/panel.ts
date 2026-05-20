@@ -7,7 +7,7 @@ export function openPanel(uri: vscode.Uri) {
     "lightVuerd",
     "Light Vuerd ERD",
     vscode.ViewColumn.One,
-    { enableScripts: true },
+    { enableScripts: true, retainContextWhenHidden: true },
   );
 
   const raw = fs.readFileSync(uri.fsPath, "utf8");
@@ -21,9 +21,16 @@ export function openPanel(uri: vscode.Uri) {
       }
 
       if (message?.type === "exportSql") {
-        const fileBase = path.basename(uri.fsPath).replace(/(\.vuerd)?\.json$/i, "");
-        const dialect = String(message.dialect || "sql").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "sql";
-        const defaultUri = vscode.Uri.file(path.join(path.dirname(uri.fsPath), `${fileBase}.${dialect}.sql`));
+        const fileBase = path
+          .basename(uri.fsPath)
+          .replace(/(\.vuerd)?\.json$/i, "");
+        const dialect =
+          String(message.dialect || "sql")
+            .replace(/[^a-z0-9_-]/gi, "")
+            .toLowerCase() || "sql";
+        const defaultUri = vscode.Uri.file(
+          path.join(path.dirname(uri.fsPath), `${fileBase}.${dialect}.sql`),
+        );
         const target = await vscode.window.showSaveDialog({
           defaultUri,
           filters: { "SQL files": ["sql"], "All files": ["*"] },
@@ -34,7 +41,9 @@ export function openPanel(uri: vscode.Uri) {
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage("Light Vuerd: file operation failed. " + reason);
+      vscode.window.showErrorMessage(
+        "Light Vuerd: file operation failed. " + reason,
+      );
     }
   });
 
@@ -1083,11 +1092,26 @@ function getColumnComment(col) { return col.comment || col.description || col.re
 
 // Nullable: default true (nullable) unless explicitly set to false / notNull=true
 function isColumnNullable(col) {
-  if (col.nullable === false || col.notNull === true || col.not_null === true || col.required === true) return false
-  if (col.nullable === true) return true
-  return true // default nullable
-}
+  const options = Number(col.options || 0)
 
+  // Vuerd NOT NULL flag
+  if ((options & 8) === 8) {
+    return false
+  }
+
+  // fallback support
+  if (
+    col.notNull === true ||
+    col.not_null === true ||
+    col.required === true ||
+    col.nullable === false
+  ) {
+    return false
+  }
+
+  return true
+}
+  
 function isColumnPK(col, table) {
   const name = getColumnName(col).toLowerCase()
   return col.primaryKey || col.pk || name === 'id' || name === (table.name||'').toLowerCase()+'_id'
@@ -1407,8 +1431,9 @@ function editField(tableId, columnId) {
       pushHistory()
       col.name = nameField.getValue().trim()
       col.dataType = typeField.getValue().trim()
-      col.nullable = nullableField.getValue()
-      col.notNull = !nullableField.getValue()
+      const nullableValue = nullableField.getValue()
+      col.nullable = nullableValue
+      col.notNull = !nullableValue
       col.default = defaultField.getValue().trim()
       col.comment = commentField.getValue().trim()
       renderAll(); selectTable(tableId, columnId); scheduleSave()
@@ -1718,8 +1743,10 @@ function renderTables() {
         nullEl.addEventListener('click', e => {
           e.stopPropagation()
           pushHistory()
-          col.nullable = !nullable
-          col.notNull = nullable
+          const nextNullable = !nullable
+
+          col.nullable = nextNullable
+          col.notNull = !nextNullable
           renderAll(); selectTable(id, colId); scheduleSave()
         })
         nullEl.addEventListener('mouseenter', () => nullEl.setAttribute('opacity','0.65'))
